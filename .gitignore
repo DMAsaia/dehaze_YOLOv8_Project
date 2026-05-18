@@ -136,6 +136,9 @@ datasets/
 runs/
 wandb/
 
+# PyCharm user workspace state
+.idea/workspace.xml
+
 .DS_Store
 
 # Neural Network weights -----------------------------------------------------------------------------------------------
