@@ -1,6 +1,6 @@
 # 方案二多任务 YOLOv8-dehaze 框架交付文档
 
-更新日期：2026-05-17
+更新日期：2026-05-20
 
 本文档用于把当前“基于多任务学习的雾天目标检测框架”交接给后续调参、实验分析和报告撰写同学。重点不是介绍论文背景，而是说明当前代码已经完成了什么、怎么复现实验、哪些地方可以继续改。
 
@@ -409,3 +409,169 @@ seed=2
 - `tools/visualize_dehaze_triplets.py` 能输出三联图。
 
 只要以上项目成立，说明方案二框架本身是可靠的，后续可以主要围绕调参和实验分析展开。
+
+## 15. 2026-05-20 V2 特征融合实验更新
+
+### 15.1 更新背景
+
+在完成 `baseline_yolov8n_100e` 与 V1 `dehaze0.05_100e` 后，V1 结果显示：仅将 `DehazeHead` 作为辅助去雾输出时，检测性能与 baseline 基本持平，且推理速度明显变慢。进一步检查模型结构可知，V1 中 `Detect` 仍然接收原始 `[P3, P4, P5]`，去雾分支主要通过 L1 去雾损失参与训练，并没有把去雾增强特征显式反馈给检测头。
+
+因此，在原方案二基础上实现 V2 最小结构升级：保留去雾图像辅助输出，同时新增 P3 去雾特征融合模块，使检测头接收融合后的 `P3_fused`。
+
+### 15.2 V2 结构改动
+
+新增配置文件：
+
+```text
+ultralytics/models/v8/yolov8-dehaze-v2.yaml
+```
+
+V2 的关键结构为：
+
+```yaml
+- [15, 1, DehazeFeatureFuse, [3, True, 0.1]]  # 22 fused P3 + dehaze image
+- [[22, 18, 21], 1, Detect, [nc]]             # 23 Detect(P3_fused, P4, P5)
+```
+
+数据流为：
+
+```text
+P3 -> DehazeFeatureFuse -> P3_fused + dehaze_img
+Detect([P3_fused, P4, P5])
+dehaze_img 与 clean_img 继续计算 L1 去雾辅助损失
+```
+
+其中 `DehazeFeatureFuse` 内部采用轻量门控残差融合：
+
+```text
+P3_fused = P3 + alpha * sigmoid(gate(dehaze_feat)) * dehaze_feat
+```
+
+新增参数：
+
+```text
+dehaze_fuse=True/False
+dehaze_fuse_alpha=0.1
+```
+
+说明：训练开始打印的模型结构表来自 YAML 初始参数，因此即使命令行设置 `dehaze_fuse=False`，结构表中仍可能显示 `DehazeFeatureFuse [64, 3, True, 0.1]`。实际训练时，`ultralytics/yolo/v8/detect/train.py` 会在 `set_model_attributes()` 中将命令行参数写入模块内部。
+
+已通过加载 checkpoint 验证：
+
+```text
+dehaze_v2_nofuse_100e: DehazeFeatureFuse.fuse = False
+dehaze_v2_fuse0.1_100e: DehazeFeatureFuse.fuse = True
+Detect from = [22, 18, 21]
+```
+
+因此，`dehaze_v2_nofuse_100e` 的 nofuse 消融是有效的。
+
+### 15.3 V2 100 epoch 实验设置
+
+两组 V2 实验均使用：
+
+```text
+model=ultralytics/models/v8/yolov8-dehaze-v2.yaml
+pretrained=yolov8n.pt
+data=datasets/VOC_hazy/VOC_hazy.yaml
+imgsz=640
+epochs=100
+batch=4
+device=0
+workers=0
+seed=0
+optimizer=SGD
+dehaze=0.05
+```
+
+区别为：
+
+```text
+dehaze_v2_nofuse_100e: dehaze_fuse=False, dehaze_fuse_alpha=0.1
+dehaze_v2_fuse0.1_100e: dehaze_fuse=True, dehaze_fuse_alpha=0.1
+```
+
+结果目录：
+
+```text
+runs/detect/dehaze_v2_nofuse_100e
+runs/detect/dehaze_v2_fuse0.1_100e
+```
+
+### 15.4 100 epoch 结果对比
+
+以下结果以同一代码工程、同一 VOC_hazy 数据集、同一 seed=0 的本机实验为主。baseline、V1、V2 均取对应 `results.csv` / `best.pt` 记录中的验证结果。
+
+| 实验 | 结果目录 | Precision | Recall | mAP50 | mAP50-95 | 备注 |
+|---|---|---:|---:|---:|---:|---|
+| YOLOv8n baseline 100e | `runs/detect/baseline_yolov8n_100e` | 0.700 | 0.625 | 0.668 | 0.455 | 原始检测基线 |
+| V1 dehaze0.05 100e | `runs/detect/dehaze0.05_100e` | 0.705 | 0.619 | 0.669 | 0.450 | 去雾辅助头，不融合特征 |
+| V2 nofuse 100e | `runs/detect/dehaze_v2_nofuse_100e` | 0.724 | 0.611 | 0.671 | 0.458 | 使用 V2 模块，但关闭特征残差融合 |
+| V2 fuse0.1 100e | `runs/detect/dehaze_v2_fuse0.1_100e` | 0.725 | 0.611 | 0.680 | 0.463 | 当前最佳结果 |
+
+从完整 `results.csv` 读取到的最佳 epoch 信息如下：
+
+| 实验 | best mAP50 epoch | best mAP50 | best mAP50-95 epoch | best mAP50-95 |
+|---|---:|---:|---:|---:|
+| baseline 100e | 96 | 0.66757 | 96 | 0.45503 |
+| V1 dehaze0.05 100e | 97 | 0.66874 | 81 | 0.44996 |
+| V2 nofuse 100e | 89 | 0.67523 | 97 | 0.45828 |
+| V2 fuse0.1 100e | 99 | 0.67992 | 98 | 0.46301 |
+
+### 15.5 实验结论
+
+1. V2 方向有效。  
+   `dehaze_v2_fuse0.1_100e` 相比 `baseline_yolov8n_100e`，mAP50 从 0.668 提升到 0.680，mAP50-95 从 0.455 提升到 0.463，说明去雾增强特征参与检测头输入后，对雾天目标检测有正向作用。
+
+2. 特征融合本身有增益。  
+   `dehaze_v2_fuse0.1_100e` 相比 `dehaze_v2_nofuse_100e`，mAP50 提升约 0.009，mAP50-95 提升约 0.005。由于已确认 nofuse 的 `fuse=False` 生效，因此该差异可以作为 P3 去雾特征融合有效的消融证据。
+
+3. V2 nofuse 也优于 V1。  
+   即使关闭残差融合，V2 nofuse 的 mAP50-95 仍高于 V1 `dehaze0.05_100e`。这说明新的 `DehazeFeatureFuse` 分支形式和训练行为比原 V1 `DehazeHead` 更稳定，但真正打开融合后性能进一步提升。
+
+4. 当前主要短板是 Recall。  
+   V2 fuse0.1 的 Precision 高于 baseline，但 Recall 从 0.625 降到 0.611，说明模型更偏向高置信预测和定位质量，漏检略有增加。后续调参应重点观察 Recall，而不是只看 mAP。
+
+5. V2 fuse0.1 可作为当前方案二主结果。  
+   当前最稳妥的报告表述是：V2 将去雾分支从单纯图像辅助监督升级为检测特征融合模块，实验结果表明 P3 去雾增强特征对检测性能具有小幅但稳定的正向作用。
+
+### 15.6 后续实验建议
+
+优先做小消融，不建议立刻大改 Backbone、Detect Head 或加入复杂注意力机制。
+
+建议下一步：
+
+```text
+1. 继续测试 dehaze_fuse_alpha=0.05
+2. 继续测试 dehaze_fuse_alpha=0.2
+3. 可选测试 dehaze=0.025, dehaze_fuse_alpha=0.1
+4. 补充 V2 三联图可视化
+5. 补充 val 集去雾质量统计：L1 / PSNR / SSIM
+```
+
+推荐命令：
+
+```bash
+yolo detect train model=ultralytics/models/v8/yolov8-dehaze-v2.yaml pretrained=yolov8n.pt data=datasets/VOC_hazy/VOC_hazy.yaml imgsz=640 epochs=100 batch=4 device=0 workers=0 seed=0 optimizer=SGD dehaze=0.05 dehaze_fuse=True dehaze_fuse_alpha=0.05 name=dehaze_v2_fuse0.05_100e
+```
+
+```bash
+yolo detect train model=ultralytics/models/v8/yolov8-dehaze-v2.yaml pretrained=yolov8n.pt data=datasets/VOC_hazy/VOC_hazy.yaml imgsz=640 epochs=100 batch=4 device=0 workers=0 seed=0 optimizer=SGD dehaze=0.05 dehaze_fuse=True dehaze_fuse_alpha=0.2 name=dehaze_v2_fuse0.2_100e
+```
+
+三联图命令：
+
+```bash
+python tools/visualize_dehaze_triplets.py ^
+  --weights runs/detect/dehaze_v2_fuse0.1_100e/weights/best.pt ^
+  --data datasets/VOC_hazy/VOC_hazy.yaml ^
+  --split val ^
+  --imgsz 640 ^
+  --num 30 ^
+  --device 0 ^
+  --out-dir runs/dehaze_vis/dehaze_v2_fuse0.1_100e
+```
+
+### 15.7 可写入报告的阶段性结论
+
+> 在 V1 多任务去雾辅助检测模型中，去雾分支仅通过 L1 图像恢复损失参与训练，Detect Head 仍然使用原始 P3/P4/P5 特征。为增强去雾任务对检测任务的直接作用，本文进一步设计了 V2 结构，在 P3 层引入 `DehazeFeatureFuse` 模块，将去雾增强特征以门控残差形式融合回检测特征，并令 Detect Head 接收 `P3_fused/P4/P5`。实验结果显示，V2 fuse0.1 在 VOC_hazy 验证集上取得 Precision=0.725、Recall=0.611、mAP50=0.680、mAP50-95=0.463，相比原始 YOLOv8n baseline 和 V1 dehaze0.05 均有提升，说明去雾增强特征参与检测分支对雾天目标检测具有正向作用。但该结构的 Recall 低于 baseline，表明后续仍需通过融合强度和去雾损失权重调节 Precision 与 Recall 的平衡。

@@ -399,6 +399,37 @@ class DehazeHead(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+
+class DehazeFeatureFuse(nn.Module):
+    # Lightweight P3 dehazing feature branch. Returns fused P3 plus an RGB auxiliary dehaze image.
+    def __init__(self, c1, c2=3, fuse=True, alpha=0.1):
+        super().__init__()
+        c_mid = max(c1 // 2, 16)
+        self.fuse = fuse
+        self.register_buffer('alpha', torch.tensor(float(alpha)))
+        self.feat = nn.Sequential(
+            DWConv(c1, c1, 3, 1),
+            Conv(c1, c1, 1, 1))
+        nn.init.zeros_(self.feat[-1].bn.weight)
+        nn.init.zeros_(self.feat[-1].bn.bias)
+        self.gate = nn.Sequential(
+            nn.Conv2d(c1, c1, 1),
+            nn.Sigmoid())
+        self.img = nn.Sequential(
+            Conv(c1, c_mid, 3, 1),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            Conv(c_mid, c_mid // 2, 3, 1),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            Conv(c_mid // 2, c_mid // 4, 3, 1),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(c_mid // 4, c2, 1),
+            nn.Sigmoid())
+
+    def forward(self, x):
+        dehaze_feat = self.feat(x)
+        fused = x + self.alpha * self.gate(dehaze_feat) * dehaze_feat if self.fuse else x
+        return fused, self.img(dehaze_feat)
+
 ######################"""
 
 

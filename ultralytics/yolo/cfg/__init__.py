@@ -63,7 +63,7 @@ CLI_HELP_MSG = \
     """
 
 # Define keys for arg type checks
-CFG_FLOAT_KEYS = 'warmup_epochs', 'box', 'cls', 'dfl', 'degrees', 'shear', 'fl_gamma'
+CFG_FLOAT_KEYS = 'warmup_epochs', 'box', 'cls', 'dfl', 'dehaze', 'dehaze_fuse_alpha', 'degrees', 'shear', 'fl_gamma'
 CFG_FRACTION_KEYS = ('dropout', 'iou', 'lr0', 'lrf', 'momentum', 'weight_decay', 'warmup_momentum', 'warmup_bias_lr',
                      'label_smoothing', 'hsv_h', 'hsv_s', 'hsv_v', 'translate', 'scale', 'perspective', 'flipud',
                      'fliplr', 'mosaic', 'mixup', 'copy_paste', 'conf', 'iou')  # fractional floats limited to 0.0 - 1.0
@@ -72,7 +72,8 @@ CFG_INT_KEYS = ('epochs', 'patience', 'batch', 'workers', 'seed', 'close_mosaic'
 CFG_BOOL_KEYS = ('save', 'exist_ok', 'verbose', 'deterministic', 'single_cls', 'image_weights', 'rect', 'cos_lr',
                  'overlap_mask', 'val', 'save_json', 'save_hybrid', 'half', 'dnn', 'plots', 'show', 'save_txt',
                  'save_conf', 'save_crop', 'hide_labels', 'hide_conf', 'visualize', 'augment', 'agnostic_nms',
-                 'retina_masks', 'boxes', 'keras', 'optimize', 'int8', 'dynamic', 'simplify', 'nms', 'v5loader')
+                 'retina_masks', 'boxes', 'keras', 'optimize', 'int8', 'dynamic', 'simplify', 'nms', 'v5loader',
+                 'dehaze_fuse')
 
 
 def cfg2dict(cfg):

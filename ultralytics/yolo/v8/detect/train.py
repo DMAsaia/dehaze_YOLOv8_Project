@@ -59,6 +59,13 @@ class DetectionTrainer(BaseTrainer):
         self.model.names = self.data['names']  # attach class names to model
         self.model.args = self.args  # attach hyperparameters to model
         self.model.return_dehaze = True  # enable auxiliary dehazing output only while model.training is True
+        dehaze_fuse = getattr(self.args, 'dehaze_fuse', True)
+        dehaze_fuse = dehaze_fuse if isinstance(dehaze_fuse, bool) else str(dehaze_fuse).lower() in ('1', 'true', 'yes')
+        dehaze_fuse_alpha = float(getattr(self.args, 'dehaze_fuse_alpha', 0.1))
+        for m in self.model.modules():
+            if m.__class__.__name__ == 'DehazeFeatureFuse':
+                m.fuse = dehaze_fuse
+                m.alpha.data.fill_(dehaze_fuse_alpha)
         # TODO: self.model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc
 
     def get_model(self, cfg=None, weights=None, verbose=True):
