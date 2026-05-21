@@ -9,8 +9,9 @@ import torch
 import torch.nn as nn
 
 from ultralytics.nn.modules import (C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C3Ghost, C3x, Classify,
-                                    Concat, Conv, ConvTranspose, DehazeFeatureFuse, DehazeHead, Detect, DWConv,
-                                    DWConvTranspose2d, Ensemble, Focus, GhostBottleneck, GhostConv, Segment)
+                                    Concat, Conv, ConvTranspose, DehazeFeatureFuse, DehazeFeatureFuseSkip,
+                                    DehazeFeatureFuseSkipResidual, DehazeHead, Detect, DWConv, DWConvTranspose2d,
+                                    Ensemble, Focus, GhostBottleneck, GhostConv, Segment)
 from ultralytics.yolo.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.yolo.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.yolo.utils.torch_utils import (fuse_conv_and_bn, fuse_deconv_and_bn, initialize_weights,
@@ -49,10 +50,11 @@ class BaseModel(nn.Module):
         Returns:
             (torch.Tensor): The last output of the model.
         """
-        y, dt, dehaze = [], [], None  # outputs
+        y, dt, dehaze, x0 = [], [], None, x  # outputs, original input
         for m in self.model:
             if m.f != -1:  # if not from previous layer
-                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+                x = x0 if m.f == -2 else y[m.f] if isinstance(m.f, int) else [
+                    x if j == -1 else x0 if j == -2 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run
@@ -462,6 +464,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
 
     if verbose:
         LOGGER.info(f"\n{'':>3}{'from':>20}{'n':>3}{'params':>10}  {'module':<45}{'arguments':<30}")
+    ch_in = ch
     ch = [ch]
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
     for i, (f, n, m, args) in enumerate(d['backbone'] + d['head']):  # from, number, module, args
@@ -478,6 +481,12 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         elif m is DehazeFeatureFuse:
             c1, c2 = ch[f], ch[f]
             args = [c1, *args]
+        elif m is DehazeFeatureFuseSkip:
+            c1, c2 = ch[f[0]], ch[f[0]]
+            args = [ch[f[0]], ch[f[1]], ch[f[2]], *args]
+        elif m is DehazeFeatureFuseSkipResidual:
+            c1, c2 = ch[f[0]], ch[f[0]]
+            args = [ch[f[0]], ch[f[1]], ch[f[2]], ch_in, *args]
         elif m in (Classify, Conv, ConvTranspose, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, Focus,
                  BottleneckCSP, C1, C2, C2f, C3, C3TR, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
             c1, c2 = ch[f], args[0]
@@ -505,7 +514,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         m_.i, m_.f, m_.type = i, f, t  # attach index, 'from' index, type
         if verbose:
             LOGGER.info(f'{i:>3}{str(f):>20}{n_:>3}{m.np:10.0f}  {t:<45}{str(args):<30}')  # print
-        save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
+        save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x not in (-1, -2))  # append to savelist
         layers.append(m_)
         if i == 0:
             ch = []

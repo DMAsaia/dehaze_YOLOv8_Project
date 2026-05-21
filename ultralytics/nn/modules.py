@@ -7,6 +7,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ultralytics.yolo.utils.tal import dist2bbox, make_anchors
 
@@ -429,6 +430,95 @@ class DehazeFeatureFuse(nn.Module):
         dehaze_feat = self.feat(x)
         fused = x + self.alpha * self.gate(dehaze_feat) * dehaze_feat if self.fuse else x
         return fused, self.img(dehaze_feat)
+
+
+class DehazeFeatureFuseSkip(nn.Module):
+    # P3 feature fusion for Detect, plus a skip decoder that uses P2/P1 details for RGB dehazing.
+    def __init__(self, c1, c2_skip, c1_skip, c_out=3, fuse=True, alpha=0.1):
+        super().__init__()
+        c_mid = max(c1 // 2, 16)
+        c_low = max(c_mid // 2, 8)
+        self.fuse = fuse
+        self.register_buffer('alpha', torch.tensor(float(alpha)))
+        self.feat = nn.Sequential(
+            DWConv(c1, c1, 3, 1),
+            Conv(c1, c1, 1, 1))
+        nn.init.zeros_(self.feat[-1].bn.weight)
+        nn.init.zeros_(self.feat[-1].bn.bias)
+        self.gate = nn.Sequential(
+            nn.Conv2d(c1, c1, 1),
+            nn.Sigmoid())
+
+        self.skip_p2 = Conv(c2_skip, c_mid, 1, 1)
+        self.dec_p2 = nn.Sequential(
+            Conv(c1 + c_mid, c_mid, 3, 1),
+            Conv(c_mid, c_mid, 3, 1))
+        self.skip_p1 = Conv(c1_skip, c_low, 1, 1)
+        self.dec_p1 = nn.Sequential(
+            Conv(c_mid + c_low, c_low, 3, 1),
+            Conv(c_low, c_low, 3, 1))
+        self.img = nn.Sequential(
+            Conv(c_low, c_low, 3, 1),
+            nn.Conv2d(c_low, c_out, 1),
+            nn.Sigmoid())
+
+    def forward(self, x):
+        p3, p2, p1 = x
+        dehaze_feat = self.feat(p3)
+        fused = p3 + self.alpha * self.gate(dehaze_feat) * dehaze_feat if self.fuse else p3
+
+        d2 = F.interpolate(dehaze_feat, size=p2.shape[-2:], mode='nearest')
+        d2 = self.dec_p2(torch.cat((d2, self.skip_p2(p2)), 1))
+        d1 = F.interpolate(d2, size=p1.shape[-2:], mode='nearest')
+        d1 = self.dec_p1(torch.cat((d1, self.skip_p1(p1)), 1))
+        out = F.interpolate(d1, scale_factor=2, mode='nearest')
+        return fused, self.img(out)
+
+
+class DehazeFeatureFuseSkipResidual(nn.Module):
+    # Skip decoder with residual RGB output: dehaze = clamp(hazy + scale * residual, 0, 1).
+    def __init__(self, c1, c2_skip, c1_skip, c_img=3, c_out=3, fuse=True, alpha=0.1, residual_scale=0.25):
+        super().__init__()
+        c_mid = max(c1 // 2, 16)
+        c_low = max(c_mid // 2, 8)
+        self.fuse = fuse
+        self.register_buffer('alpha', torch.tensor(float(alpha)))
+        self.register_buffer('residual_scale', torch.tensor(float(residual_scale)))
+        self.feat = nn.Sequential(
+            DWConv(c1, c1, 3, 1),
+            Conv(c1, c1, 1, 1))
+        nn.init.zeros_(self.feat[-1].bn.weight)
+        nn.init.zeros_(self.feat[-1].bn.bias)
+        self.gate = nn.Sequential(
+            nn.Conv2d(c1, c1, 1),
+            nn.Sigmoid())
+
+        self.skip_p2 = Conv(c2_skip, c_mid, 1, 1)
+        self.dec_p2 = nn.Sequential(
+            Conv(c1 + c_mid, c_mid, 3, 1),
+            Conv(c_mid, c_mid, 3, 1))
+        self.skip_p1 = Conv(c1_skip, c_low, 1, 1)
+        self.dec_p1 = nn.Sequential(
+            Conv(c_mid + c_low, c_low, 3, 1),
+            Conv(c_low, c_low, 3, 1))
+        self.img_context = Conv(c_img, c_low, 3, 1)
+        self.residual = nn.Sequential(
+            Conv(c_low * 2, c_low, 3, 1),
+            nn.Conv2d(c_low, c_out, 1),
+            nn.Tanh())
+
+    def forward(self, x):
+        p3, p2, p1, hazy = x
+        dehaze_feat = self.feat(p3)
+        fused = p3 + self.alpha * self.gate(dehaze_feat) * dehaze_feat if self.fuse else p3
+
+        d2 = F.interpolate(dehaze_feat, size=p2.shape[-2:], mode='nearest')
+        d2 = self.dec_p2(torch.cat((d2, self.skip_p2(p2)), 1))
+        d1 = F.interpolate(d2, size=p1.shape[-2:], mode='nearest')
+        d1 = self.dec_p1(torch.cat((d1, self.skip_p1(p1)), 1))
+        d0 = F.interpolate(d1, size=hazy.shape[-2:], mode='nearest')
+        residual = self.residual(torch.cat((d0, self.img_context(hazy)), 1))
+        return fused, (hazy + self.residual_scale * residual).clamp(0, 1)
 
 ######################"""
 

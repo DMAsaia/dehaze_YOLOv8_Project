@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ultralytics.nn.modules import DehazeFeatureFuse, DehazeHead
+from ultralytics.nn.modules import DehazeFeatureFuse, DehazeFeatureFuseSkip, DehazeFeatureFuseSkipResidual, DehazeHead
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.utils import yaml_load
 
@@ -110,6 +110,19 @@ def ssim_rgb(a, b):
     return float(np.mean(scores))
 
 
+def gradient_l1(a, b):
+    scores = []
+    for ch in range(3):
+        x = a[..., ch].astype(np.float32)
+        y = b[..., ch].astype(np.float32)
+        gx = cv2.Sobel(x, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(x, cv2.CV_32F, 0, 1, ksize=3)
+        tx = cv2.Sobel(y, cv2.CV_32F, 1, 0, ksize=3)
+        ty = cv2.Sobel(y, cv2.CV_32F, 0, 1, ksize=3)
+        scores.append(float(np.mean(np.abs(gx - tx) + np.abs(gy - ty))))
+    return float(np.mean(scores))
+
+
 def compute_metrics(pred, target):
     diff = pred - target
     l1 = float(np.mean(np.abs(diff)))
@@ -119,6 +132,7 @@ def compute_metrics(pred, target):
         'mse': mse,
         'psnr': psnr_from_mse(mse),
         'ssim': ssim_rgb(pred, target),
+        'grad_l1': gradient_l1(pred, target),
     }
 
 
@@ -134,7 +148,8 @@ def main():
     device = torch.device(f'cuda:{args.device}' if args.device and args.device != 'cpu' and torch.cuda.is_available()
                           else 'cpu')
     model, _ = attempt_load_one_weight(str(args.weights), device=device)
-    if not any(isinstance(m, (DehazeFeatureFuse, DehazeHead)) for m in model.modules()):
+    if not any(isinstance(m, (DehazeFeatureFuse, DehazeFeatureFuseSkip, DehazeFeatureFuseSkipResidual, DehazeHead))
+               for m in model.modules()):
         raise RuntimeError(f'{args.weights} does not contain a dehaze output module.')
 
     # Keep child modules in eval mode, but enable BaseModel's dehaze return gate.

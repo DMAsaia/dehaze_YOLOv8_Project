@@ -62,10 +62,13 @@ class DetectionTrainer(BaseTrainer):
         dehaze_fuse = getattr(self.args, 'dehaze_fuse', True)
         dehaze_fuse = dehaze_fuse if isinstance(dehaze_fuse, bool) else str(dehaze_fuse).lower() in ('1', 'true', 'yes')
         dehaze_fuse_alpha = float(getattr(self.args, 'dehaze_fuse_alpha', 0.1))
+        dehaze_residual_scale = float(getattr(self.args, 'dehaze_residual_scale', 0.25))
         for m in self.model.modules():
-            if m.__class__.__name__ == 'DehazeFeatureFuse':
+            if m.__class__.__name__ in ('DehazeFeatureFuse', 'DehazeFeatureFuseSkip', 'DehazeFeatureFuseSkipResidual'):
                 m.fuse = dehaze_fuse
                 m.alpha.data.fill_(dehaze_fuse_alpha)
+                if hasattr(m, 'residual_scale'):
+                    m.residual_scale.data.fill_(dehaze_residual_scale)
         # TODO: self.model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc
 
     def get_model(self, cfg=None, weights=None, verbose=True):
@@ -138,6 +141,59 @@ class Loss:
         self.assigner = TaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
         self.bbox_loss = BboxLoss(m.reg_max - 1, use_dfl=self.use_dfl).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
+
+    @staticmethod
+    def ssim_loss(pred, target, window_size=3):
+        pred = pred.float()
+        target = target.float()
+        padding = window_size // 2
+        c1 = 0.01 ** 2
+        c2 = 0.03 ** 2
+
+        mu_pred = F.avg_pool2d(pred, window_size, stride=1, padding=padding)
+        mu_target = F.avg_pool2d(target, window_size, stride=1, padding=padding)
+        mu_pred_sq = mu_pred.pow(2)
+        mu_target_sq = mu_target.pow(2)
+        mu_pred_target = mu_pred * mu_target
+
+        sigma_pred = F.avg_pool2d(pred * pred, window_size, stride=1, padding=padding) - mu_pred_sq
+        sigma_target = F.avg_pool2d(target * target, window_size, stride=1, padding=padding) - mu_target_sq
+        sigma_pred_target = F.avg_pool2d(pred * target, window_size, stride=1, padding=padding) - mu_pred_target
+
+        ssim_map = ((2 * mu_pred_target + c1) * (2 * sigma_pred_target + c2)) / (
+            (mu_pred_sq + mu_target_sq + c1) * (sigma_pred + sigma_target + c2))
+        return (1.0 - ssim_map.clamp(0, 1)).mean()
+
+    @staticmethod
+    def gradient_loss(pred, target):
+        pred = pred.float()
+        target = target.float()
+        pred_dx = pred[..., :, 1:] - pred[..., :, :-1]
+        target_dx = target[..., :, 1:] - target[..., :, :-1]
+        pred_dy = pred[..., 1:, :] - pred[..., :-1, :]
+        target_dy = target[..., 1:, :] - target[..., :-1, :]
+        return F.l1_loss(pred_dx, target_dx) + F.l1_loss(pred_dy, target_dy)
+
+    @staticmethod
+    def color_loss(pred, target):
+        pred_mean = pred.float().mean(dim=(2, 3))
+        target_mean = target.float().mean(dim=(2, 3))
+        return F.l1_loss(pred_mean, target_mean)
+
+    def dehaze_loss(self, pred, target):
+        l1 = F.l1_loss(pred, target)
+        ssim_weight = float(getattr(self.hyp, 'dehaze_ssim', 0.0))
+        grad_weight = float(getattr(self.hyp, 'dehaze_grad', 0.0))
+        color_weight = float(getattr(self.hyp, 'dehaze_color', 0.0))
+
+        loss = l1
+        if ssim_weight:
+            loss = loss + ssim_weight * self.ssim_loss(pred, target)
+        if grad_weight:
+            loss = loss + grad_weight * self.gradient_loss(pred, target)
+        if color_weight:
+            loss = loss + color_weight * self.color_loss(pred, target)
+        return loss
 
     def preprocess(self, targets, batch_size, scale_tensor):
         if targets.shape[0] == 0:
@@ -213,7 +269,7 @@ class Loss:
             clean_img = batch['clean_img'].to(self.device, non_blocking=True).type_as(dehaze_pred)
             if dehaze_pred.shape[-2:] != clean_img.shape[-2:]:
                 dehaze_pred = F.interpolate(dehaze_pred, size=clean_img.shape[-2:], mode='bilinear', align_corners=False)
-            loss[3] = F.l1_loss(dehaze_pred, clean_img) * getattr(self.hyp, 'dehaze', 0.05)
+            loss[3] = self.dehaze_loss(dehaze_pred, clean_img) * getattr(self.hyp, 'dehaze', 0.05)
 
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl, dehaze)
 

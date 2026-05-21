@@ -91,6 +91,10 @@ dfl: 1.5  # dfl loss gain
 dehaze: 0.05  # auxiliary dehazing loss gain
 dehaze_fuse: True  # enable dehazing feature fusion modules when present
 dehaze_fuse_alpha: 0.1  # initial dehazing feature fusion scale
+dehaze_residual_scale: 0.25  # residual RGB output scale for skip dehazing decoders
+dehaze_ssim: 0.1  # SSIM loss weight inside the auxiliary dehazing loss
+dehaze_grad: 0.05  # image-gradient loss weight inside the auxiliary dehazing loss
+dehaze_color: 0.02  # RGB channel-mean color loss weight inside the auxiliary dehazing loss
 fl_gamma: 0.0  # focal loss gamma (efficientDet default gamma=1.5)
 label_smoothing: 0.0  # label smoothing (fraction)
 nbs: 64  # nominal batch size

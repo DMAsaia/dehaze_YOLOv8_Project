@@ -63,7 +63,8 @@ CLI_HELP_MSG = \
     """
 
 # Define keys for arg type checks
-CFG_FLOAT_KEYS = 'warmup_epochs', 'box', 'cls', 'dfl', 'dehaze', 'dehaze_fuse_alpha', 'degrees', 'shear', 'fl_gamma'
+CFG_FLOAT_KEYS = ('warmup_epochs', 'box', 'cls', 'dfl', 'dehaze', 'dehaze_fuse_alpha', 'dehaze_residual_scale',
+                  'dehaze_ssim', 'dehaze_grad', 'dehaze_color', 'degrees', 'shear', 'fl_gamma')
 CFG_FRACTION_KEYS = ('dropout', 'iou', 'lr0', 'lrf', 'momentum', 'weight_decay', 'warmup_momentum', 'warmup_bias_lr',
                      'label_smoothing', 'hsv_h', 'hsv_s', 'hsv_v', 'translate', 'scale', 'perspective', 'flipud',
                      'fliplr', 'mosaic', 'mixup', 'copy_paste', 'conf', 'iou')  # fractional floats limited to 0.0 - 1.0

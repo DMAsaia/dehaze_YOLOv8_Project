@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ultralytics.nn.modules import DehazeFeatureFuse, DehazeHead
+from ultralytics.nn.modules import DehazeFeatureFuse, DehazeFeatureFuseSkip, DehazeFeatureFuseSkipResidual, DehazeHead
 from ultralytics.nn.tasks import attempt_load_one_weight
 from ultralytics.yolo.utils import yaml_load
 
@@ -98,7 +98,8 @@ def main():
     device = torch.device(f'cuda:{args.device}' if args.device and args.device != 'cpu' and torch.cuda.is_available()
                           else 'cpu')
     model, _ = attempt_load_one_weight(str(args.weights), device=device)
-    if not any(isinstance(m, (DehazeFeatureFuse, DehazeHead)) for m in model.modules()):
+    if not any(isinstance(m, (DehazeFeatureFuse, DehazeFeatureFuseSkip, DehazeFeatureFuseSkipResidual, DehazeHead))
+               for m in model.modules()):
         raise RuntimeError(f'{args.weights} does not contain a dehaze output module.')
 
     # Keep child modules in eval mode, but enable BaseModel's dehaze return gate.
