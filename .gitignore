@@ -133,7 +133,6 @@ dmypy.json
 
 # datasets and projects
 datasets/
-runs/
 wandb/
 
 # PyCharm user workspace state
@@ -143,8 +142,10 @@ wandb/
 
 # Neural Network weights -----------------------------------------------------------------------------------------------
 weights/
+!runs/**/weights/
 *.weights
 *.pt
+!runs/**/*.pt
 *.pb
 *.onnx
 *.engine
