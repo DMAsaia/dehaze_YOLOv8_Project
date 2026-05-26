@@ -9,6 +9,9 @@
       <excludeFolder url="file://$MODULE_DIR$/runs/detect/train5" />
       <excludeFolder url="file://$MODULE_DIR$/runs/detect/train6" />
       <excludeFolder url="file://$MODULE_DIR$/runs/detect/train7" />
+      <excludeFolder url="file://$MODULE_DIR$/runs/detect/dehaze_v2_debug_1e" />
+      <excludeFolder url="file://$MODULE_DIR$/runs/detect/dehaze_v2_debug_1e_fix" />
+      <excludeFolder url="file://$MODULE_DIR$/runs/detect/dehaze_v3c_debug_1e" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.12" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
